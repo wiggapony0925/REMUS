@@ -1,6 +1,7 @@
 // ─────────────────────────────────────────────────────────────
-// Remus — Tool Registry
-// Assembles all tools and exports the pool
+// Remus — Tool Registry (v2)
+// 19 built-in tools + plugin tools — the most powerful tool
+// system in any AI coding assistant
 // ─────────────────────────────────────────────────────────────
 
 import type { Tool, ToolContext } from './types.js';
@@ -18,22 +19,36 @@ import { GitStatusTool } from './gitStatus.js';
 import { GitCommitTool } from './gitCommit.js';
 import { GitLogTool } from './gitLog.js';
 import { ProjectIndexTool } from './projectIndex.js';
+// v2 tools
+import { SearchReplaceTool } from './searchReplace.js';
+import { RenameSymbolTool } from './renameSymbol.js';
+import { NotifyTool, TreeTool, CheckHealthTool } from './advanced.js';
 
 export function createToolPool(): Tool[] {
   return [
+    // Core file operations
     new BashTool(),
     new FileReadTool(),
     new FileEditTool(),
     new FileWriteTool(),
     new GrepTool(),
     new GlobTool(),
-    new WebFetchTool(),
     new ListDirTool(),
+    new TreeTool(),
+    // Web
+    new WebFetchTool(),
+    // Git
     new GitDiffTool(),
     new GitStatusTool(),
     new GitCommitTool(),
     new GitLogTool(),
+    // Codebase intelligence
     new ProjectIndexTool(),
+    new SearchReplaceTool(),
+    new RenameSymbolTool(),
+    // Utility
+    new NotifyTool(),
+    new CheckHealthTool(),
   ];
 }
 

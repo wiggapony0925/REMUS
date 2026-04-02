@@ -1,19 +1,26 @@
 // ─────────────────────────────────────────────────────────────
-// Remus — Provider Registry & Factory
+// Remus — Provider Registry & Factory (v2)
+// 6 providers + Remus model stub + model router
+// Most flexible LLM backend system in any coding assistant
 // ─────────────────────────────────────────────────────────────
 
 import type { LLMProvider } from './types.js';
 import { OpenAIProvider } from './openai.js';
 import { OllamaProvider } from './ollama.js';
 import { AnthropicProvider } from './anthropic.js';
+import { RemusModelProvider } from './remus.js';
 
-export type ProviderType = 'ollama' | 'openai' | 'anthropic' | 'openrouter' | 'lmstudio' | 'custom';
+export type ProviderType = 'ollama' | 'openai' | 'anthropic' | 'openrouter' | 'lmstudio' | 'remus' | 'custom';
 
 export interface ProviderConfig {
   type: ProviderType;
   baseUrl?: string;
   apiKey?: string;
   model: string;
+  /** Fast model for simple tasks (model router) */
+  fastModel?: string;
+  /** Smart model for complex tasks (model router) */
+  smartModel?: string;
 }
 
 const DEFAULT_CONFIGS: Record<ProviderType, Partial<ProviderConfig>> = {
@@ -22,6 +29,7 @@ const DEFAULT_CONFIGS: Record<ProviderType, Partial<ProviderConfig>> = {
   anthropic: { baseUrl: 'https://api.anthropic.com' },
   openrouter: { baseUrl: 'https://openrouter.ai/api' },
   lmstudio: { baseUrl: 'http://localhost:1234' },
+  remus: { baseUrl: 'https://api.remus.ai' },  // Future Remus API
   custom: {},
 };
 
@@ -36,6 +44,13 @@ export function createProvider(config: ProviderConfig): LLMProvider {
 
     case 'anthropic':
       return new AnthropicProvider({ apiKey, model: config.model, baseUrl });
+
+    case 'remus':
+      return new RemusModelProvider({
+        baseUrl: baseUrl || 'https://api.remus.ai',
+        apiKey,
+        model: config.model,
+      });
 
     case 'openai':
     case 'openrouter':
@@ -72,6 +87,18 @@ export function autoDetectProvider(): ProviderConfig {
       baseUrl: env.REMUS_BASE_URL,
       apiKey: env.REMUS_API_KEY ?? '',
       model: env.REMUS_MODEL ?? 'default',
+      fastModel: env.REMUS_FAST_MODEL,
+      smartModel: env.REMUS_SMART_MODEL,
+    };
+  }
+
+  // Remus native model (when available)
+  if (env.REMUS_MODEL_KEY) {
+    return {
+      type: 'remus',
+      apiKey: env.REMUS_MODEL_KEY,
+      model: env.REMUS_MODEL ?? 'remus-1',
+      baseUrl: env.REMUS_MODEL_URL ?? 'https://api.remus.ai',
     };
   }
 
@@ -81,6 +108,8 @@ export function autoDetectProvider(): ProviderConfig {
       type: 'openai',
       apiKey: env.OPENAI_API_KEY,
       model: env.REMUS_MODEL ?? 'gpt-4o',
+      fastModel: env.REMUS_FAST_MODEL ?? 'gpt-4o-mini',
+      smartModel: env.REMUS_SMART_MODEL ?? 'gpt-4o',
     };
   }
 

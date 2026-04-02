@@ -16,6 +16,8 @@ import { Markdown } from './components/Markdown.js';
 import { StatusBar } from './components/StatusBar.js';
 import { loadConfig, type RemusConfig } from './services/config.js';
 import { UndoManager } from './services/undo.js';
+import { think, TaskQueue } from './services/thinkMode.js';
+import { PluginManager } from './services/pluginManager.js';
 import {
   createSession,
   saveSession,
@@ -126,6 +128,7 @@ interface AppState {
   error: string | null;
   cost: string;
   contextTokens: number;
+  speedIndicator: string;
 }
 
 function App({ opts }: { opts: CLIOptions }) {
@@ -138,12 +141,15 @@ function App({ opts }: { opts: CLIOptions }) {
     error: null,
     cost: '$0.00',
     contextTokens: 0,
+    speedIndicator: '',
   });
 
   const engineRef = useRef<QueryEngine | null>(null);
   const sessionRef = useRef<Session | null>(null);
   const remusConfigRef = useRef<RemusConfig>(loadConfig(process.cwd()));
   const providerConfigRef = useRef<ProviderConfig>(resolveProviderConfig(opts, remusConfigRef.current));
+  const taskQueueRef = useRef<TaskQueue>(new TaskQueue());
+  const pluginManagerRef = useRef<PluginManager>(new PluginManager());
 
   // Initialize engine
   useEffect(() => {
@@ -230,6 +236,9 @@ function App({ opts }: { opts: CLIOptions }) {
           }],
         }));
       },
+      onSpeedUpdate: (indicator) => {
+        setState(prev => ({ ...prev, speedIndicator: indicator }));
+      },
     });
 
     engineRef.current = engine;
@@ -295,7 +304,7 @@ function App({ opts }: { opts: CLIOptions }) {
 
         case 'clear':
           engineRef.current?.reset();
-          setState({ messages: [], isStreaming: false, streamingText: '', error: null, cost: '$0.00', contextTokens: 0 });
+          setState({ messages: [], isStreaming: false, streamingText: '', error: null, cost: '$0.00', contextTokens: 0, speedIndicator: '' });
           setInput('');
           return;
 
@@ -308,16 +317,39 @@ function App({ opts }: { opts: CLIOptions }) {
                 '',
                 chalk.hex('#FF6B35').bold('  ⬡ Remus Commands'),
                 chalk.dim('  ────────────────────────────────────'),
-                `  ${chalk.hex('#FF8C42')('/help')}         ${chalk.gray('─ Show this help')}`,
+                '',
+                chalk.hex('#FF8C42').bold('  Chat'),
                 `  ${chalk.hex('#FF8C42')('/clear')}        ${chalk.gray('─ Clear conversation')}`,
                 `  ${chalk.hex('#FF8C42')('/model <name>')} ${chalk.gray('─ Switch model')}`,
                 `  ${chalk.hex('#FF8C42')('/compact')}      ${chalk.gray('─ Compress context (save tokens)')}`,
-                `  ${chalk.hex('#FF8C42')('/undo')}         ${chalk.gray('─ Undo last file change')}`,
-                `  ${chalk.hex('#FF8C42')('/redo')}         ${chalk.gray('─ Redo last undone change')}`,
-                `  ${chalk.hex('#FF8C42')('/cost')}         ${chalk.gray('─ Detailed cost breakdown')}`,
-                `  ${chalk.hex('#FF8C42')('/sessions')}     ${chalk.gray('─ List saved sessions')}`,
-                `  ${chalk.hex('#FF8C42')('/save')}         ${chalk.gray('─ Save current session')}`,
-                `  ${chalk.hex('#FF8C42')('/exit')}         ${chalk.gray('─ Save and exit')}`,
+                '',
+                chalk.hex('#FF8C42').bold('  Intelligence'),
+                `  ${chalk.hex('#FFB875')('/think <task>')} ${chalk.gray('─ Plan before executing')}`,
+                `  ${chalk.hex('#FFB875')('/autofix')}      ${chalk.gray('─ Auto-detect & fix errors')}`,
+                `  ${chalk.hex('#FFB875')('/memory')}       ${chalk.gray('─ View persistent memories')}`,
+                `  ${chalk.hex('#FFB875')('/remember <x>')} ${chalk.gray('─ Teach Remus a fact')}`,
+                '',
+                chalk.hex('#FF8C42').bold('  Tasks'),
+                `  ${chalk.hex('#FFD700')('/task add <t>')} ${chalk.gray('─ Queue a task')}`,
+                `  ${chalk.hex('#FFD700')('/task list')}    ${chalk.gray('─ Show task queue')}`,
+                `  ${chalk.hex('#FFD700')('/task run')}     ${chalk.gray('─ Execute all queued tasks')}`,
+                `  ${chalk.hex('#FFD700')('/task clear')}   ${chalk.gray('─ Clear task queue')}`,
+                '',
+                chalk.hex('#FF8C42').bold('  History & Undo'),
+                `  ${chalk.hex('#00CED1')('/undo')}         ${chalk.gray('─ Undo last file change')}`,
+                `  ${chalk.hex('#00CED1')('/redo')}         ${chalk.gray('─ Redo last undone change')}`,
+                `  ${chalk.hex('#00CED1')('/sessions')}     ${chalk.gray('─ List saved sessions')}`,
+                `  ${chalk.hex('#00CED1')('/save')}         ${chalk.gray('─ Save current session')}`,
+                '',
+                chalk.hex('#FF8C42').bold('  Metrics'),
+                `  ${chalk.hex('#00FF88')('/cost')}         ${chalk.gray('─ Detailed cost breakdown')}`,
+                `  ${chalk.hex('#00FF88')('/speed')}        ${chalk.gray('─ Performance metrics')}`,
+                `  ${chalk.hex('#00FF88')('/cache')}        ${chalk.gray('─ Cache hit statistics')}`,
+                '',
+                chalk.hex('#FF8C42').bold('  System'),
+                `  ${chalk.hex('#B0B0B0')('/plugins')}      ${chalk.gray('─ List loaded plugins')}`,
+                `  ${chalk.hex('#B0B0B0')('/health')}       ${chalk.gray('─ Project health check')}`,
+                `  ${chalk.hex('#B0B0B0')('/exit')}         ${chalk.gray('─ Save and exit')}`,
                 '',
                 chalk.hex('#FF6B35').bold('  ⌨ Keyboard'),
                 chalk.dim('  ────────────────────────────────────'),
@@ -539,7 +571,441 @@ function App({ opts }: { opts: CLIOptions }) {
           return;
         }
 
+        // ─── NEW v2 COMMANDS ───
+
+        case 'think': {
+          const taskDesc = args.join(' ');
+          if (!taskDesc) {
+            setState(prev => ({
+              ...prev,
+              messages: [...prev.messages, {
+                role: 'system',
+                content: 'Usage: /think <task description>\nRemus will analyze and plan before executing.',
+                timestamp: Date.now(),
+              }],
+            }));
+            setInput('');
+            return;
+          }
+          setState(prev => ({
+            ...prev,
+            messages: [...prev.messages, {
+              role: 'system',
+              content: chalk.hex('#FFB875')('⬡ Thinking...'),
+              timestamp: Date.now(),
+            }],
+          }));
+          try {
+            const providerConfig = providerConfigRef.current;
+            const provider = createProvider(providerConfig);
+            const result = await think(provider, providerConfig.model, taskDesc);
+            const planMsg = [
+              chalk.hex('#FF6B35').bold('⬡ Remus Think Mode'),
+              chalk.dim('─'.repeat(40)),
+              '',
+              chalk.white.bold('Plan: ') + result.plan,
+              '',
+              chalk.hex('#FF8C42').bold('Steps:'),
+              ...result.steps.map((s, i) => `  ${chalk.hex('#FFB875')(`${i + 1}.`)} ${s}`),
+              '',
+              result.risks.length > 0 ? chalk.yellow.bold('Risks:') : '',
+              ...result.risks.map(r => `  ${chalk.yellow('⚠')} ${r}`),
+              '',
+              `${chalk.dim('Complexity:')} ${chalk.hex('#FF8C42')(result.estimatedComplexity)}  ${chalk.dim('Est. tool calls:')} ${chalk.hex('#FF8C42')(String(result.estimatedToolCalls))}  ${chalk.dim('Think time:')} ${chalk.hex('#FF8C42')(`${result.thinkingTime}ms`)}`,
+              '',
+              chalk.gray('Send "go" to execute this plan, or modify as needed.'),
+            ].filter(Boolean).join('\n');
+
+            setState(prev => ({
+              ...prev,
+              messages: [...prev.messages, {
+                role: 'system',
+                content: planMsg,
+                timestamp: Date.now(),
+              }],
+            }));
+          } catch (err) {
+            setState(prev => ({
+              ...prev,
+              messages: [...prev.messages, {
+                role: 'system',
+                content: chalk.red(`Think mode error: ${(err as Error).message}`),
+                timestamp: Date.now(),
+              }],
+            }));
+          }
+          setInput('');
+          return;
+        }
+
+        case 'autofix': {
+          if (!engineRef.current) { setInput(''); return; }
+          setState(prev => ({
+            ...prev,
+            isStreaming: true,
+            streamingText: '',
+            messages: [...prev.messages, {
+              role: 'system',
+              content: chalk.hex('#FF6B35')('⬡ Auto-Fix Pipeline starting...'),
+              timestamp: Date.now(),
+            }],
+          }));
+
+          try {
+            const response = await engineRef.current.submit(
+              'Run a health check on this project. Look for TypeScript errors (tsc --noEmit), lint issues, and any obvious bugs. Fix ALL errors you find. After fixing, verify the fixes work by re-running the checks. Report what you fixed.'
+            );
+            setState(prev => ({
+              ...prev,
+              isStreaming: false,
+              messages: [...prev.messages, {
+                role: 'assistant',
+                content: prev.streamingText || response,
+                timestamp: Date.now(),
+              }],
+              streamingText: '',
+            }));
+          } catch (err) {
+            setState(prev => ({
+              ...prev,
+              isStreaming: false,
+              error: (err as Error).message,
+              streamingText: '',
+            }));
+          }
+          setInput('');
+          return;
+        }
+
+        case 'memory': {
+          const memory = engineRef.current?.memory;
+          if (!memory) { setInput(''); return; }
+          const stats = memory.getStats();
+          const entries = memory.list().slice(0, 15);
+          const memoryMsg = [
+            chalk.hex('#FF6B35').bold('⬡ Remus Memory'),
+            chalk.dim('─'.repeat(40)),
+            `  Total memories: ${chalk.hex('#FF8C42')(String(stats.total))}`,
+            `  Total accesses: ${chalk.hex('#FF8C42')(String(stats.totalAccesses))}`,
+            `  Types: ${Object.entries(stats.byType).map(([t, c]) => `${t}(${c})`).join(', ')}`,
+            '',
+            entries.length > 0 ? chalk.hex('#FF8C42').bold('Recent:') : chalk.gray('No memories yet.'),
+            ...entries.map(e => `  ${chalk.dim(`[${e.type}]`)} ${e.content.slice(0, 80)} ${chalk.dim(`(${e.accessCount} hits)`)}`),
+          ].join('\n');
+          setState(prev => ({
+            ...prev,
+            messages: [...prev.messages, {
+              role: 'system',
+              content: memoryMsg,
+              timestamp: Date.now(),
+            }],
+          }));
+          setInput('');
+          return;
+        }
+
+        case 'remember': {
+          const fact = args.join(' ');
+          if (!fact) {
+            setState(prev => ({
+              ...prev,
+              messages: [...prev.messages, {
+                role: 'system',
+                content: 'Usage: /remember <fact>\nTeach Remus something to remember across sessions.',
+                timestamp: Date.now(),
+              }],
+            }));
+            setInput('');
+            return;
+          }
+          const memory = engineRef.current?.memory;
+          if (memory) {
+            memory.remember(fact, 'fact', ['user-taught'], 1.0, 'user');
+            setState(prev => ({
+              ...prev,
+              messages: [...prev.messages, {
+                role: 'system',
+                content: `${chalk.green('✓')} Remembered: "${fact}"`,
+                timestamp: Date.now(),
+              }],
+            }));
+          }
+          setInput('');
+          return;
+        }
+
+        case 'task': {
+          const subCmd = args[0];
+          const taskArgs = args.slice(1).join(' ');
+          const taskQueue = taskQueueRef.current;
+
+          switch (subCmd) {
+            case 'add': {
+              if (!taskArgs) {
+                setState(prev => ({
+                  ...prev,
+                  messages: [...prev.messages, {
+                    role: 'system',
+                    content: 'Usage: /task add <description>',
+                    timestamp: Date.now(),
+                  }],
+                }));
+                break;
+              }
+              const task = taskQueue.add(taskArgs);
+              setState(prev => ({
+                ...prev,
+                messages: [...prev.messages, {
+                  role: 'system',
+                  content: `${chalk.green('✓')} Task #${task.id} added: "${taskArgs}"`,
+                  timestamp: Date.now(),
+                }],
+              }));
+              break;
+            }
+            case 'list': {
+              const tasks = taskQueue.list();
+              const progress = taskQueue.getProgress();
+              const statusIcons: Record<string, string> = {
+                pending: chalk.gray('○'),
+                running: chalk.yellow('●'),
+                completed: chalk.green('✓'),
+                failed: chalk.red('✗'),
+                skipped: chalk.dim('⊘'),
+              };
+              const listMsg = tasks.length === 0
+                ? 'No tasks in queue. Use /task add <description>'
+                : [
+                    chalk.hex('#FF6B35').bold('⬡ Task Queue') + chalk.dim(` (${progress.completed}/${progress.total} done)`),
+                    ...tasks.map(t => `  ${statusIcons[t.status]} #${t.id}: ${t.description}${t.error ? chalk.red(` — ${t.error}`) : ''}`),
+                  ].join('\n');
+              setState(prev => ({
+                ...prev,
+                messages: [...prev.messages, {
+                  role: 'system',
+                  content: listMsg,
+                  timestamp: Date.now(),
+                }],
+              }));
+              break;
+            }
+            case 'run': {
+              if (!engineRef.current) break;
+              const tasks = taskQueue.list().filter(t => t.status === 'pending');
+              if (tasks.length === 0) {
+                setState(prev => ({
+                  ...prev,
+                  messages: [...prev.messages, {
+                    role: 'system',
+                    content: 'No pending tasks. Use /task add <description> first.',
+                    timestamp: Date.now(),
+                  }],
+                }));
+                break;
+              }
+              setState(prev => ({
+                ...prev,
+                isStreaming: true,
+                streamingText: '',
+                messages: [...prev.messages, {
+                  role: 'system',
+                  content: chalk.hex('#FF6B35')(`⬡ Running ${tasks.length} task(s)...`),
+                  timestamp: Date.now(),
+                }],
+              }));
+              taskQueue.setRunning(true);
+              for (const task of tasks) {
+                taskQueue.markRunning(task.id);
+                try {
+                  const response = await engineRef.current.submit(task.description);
+                  taskQueue.markCompleted(task.id, response.slice(0, 200));
+                  setState(prev => ({
+                    ...prev,
+                    messages: [...prev.messages, {
+                      role: 'system',
+                      content: `${chalk.green('✓')} Task #${task.id} completed`,
+                      timestamp: Date.now(),
+                    }, {
+                      role: 'assistant',
+                      content: prev.streamingText || response,
+                      timestamp: Date.now(),
+                    }],
+                    streamingText: '',
+                  }));
+                } catch (err) {
+                  taskQueue.markFailed(task.id, (err as Error).message);
+                  setState(prev => ({
+                    ...prev,
+                    messages: [...prev.messages, {
+                      role: 'system',
+                      content: `${chalk.red('✗')} Task #${task.id} failed: ${(err as Error).message}`,
+                      timestamp: Date.now(),
+                    }],
+                  }));
+                }
+              }
+              taskQueue.setRunning(false);
+              setState(prev => ({ ...prev, isStreaming: false }));
+              break;
+            }
+            case 'clear':
+              taskQueue.clear();
+              setState(prev => ({
+                ...prev,
+                messages: [...prev.messages, {
+                  role: 'system',
+                  content: `${chalk.green('✓')} Task queue cleared.`,
+                  timestamp: Date.now(),
+                }],
+              }));
+              break;
+            default:
+              setState(prev => ({
+                ...prev,
+                messages: [...prev.messages, {
+                  role: 'system',
+                  content: 'Usage: /task [add|list|run|clear] <description>',
+                  timestamp: Date.now(),
+                }],
+              }));
+          }
+          setInput('');
+          return;
+        }
+
+        case 'speed':
+        case 'perf': {
+          const perf = engineRef.current?.perf;
+          if (!perf) { setInput(''); return; }
+          const report = perf.getReport();
+          setState(prev => ({
+            ...prev,
+            messages: [...prev.messages, {
+              role: 'system',
+              content: chalk.hex('#FF6B35').bold('⬡ Performance Metrics\n') + report,
+              timestamp: Date.now(),
+            }],
+          }));
+          setInput('');
+          return;
+        }
+
+        case 'cache': {
+          const cache = engineRef.current?.cache;
+          if (!cache) { setInput(''); return; }
+          const stats = cache.getStats();
+          const cacheMsg = [
+            chalk.hex('#FF6B35').bold('⬡ Cache Statistics'),
+            chalk.dim('─'.repeat(40)),
+            `  Entries:      ${chalk.hex('#FF8C42')(String(stats.entries))}`,
+            `  Hits:         ${chalk.green(String(stats.hits))}`,
+            `  Misses:       ${chalk.gray(String(stats.misses))}`,
+            `  Hit Rate:     ${chalk.hex('#FF8C42')(stats.hitRate)}`,
+            `  Tokens Saved: ${chalk.green(stats.savedTokens.toLocaleString())}`,
+            `  Est. Savings: ${chalk.green(`$${stats.savedCost.toFixed(4)}`)}`,
+          ].join('\n');
+          setState(prev => ({
+            ...prev,
+            messages: [...prev.messages, {
+              role: 'system',
+              content: cacheMsg,
+              timestamp: Date.now(),
+            }],
+          }));
+          setInput('');
+          return;
+        }
+
+        case 'plugins': {
+          const plugins = pluginManagerRef.current.list();
+          const pluginMsg = plugins.length === 0
+            ? [
+                chalk.hex('#FF6B35').bold('⬡ Plugins'),
+                chalk.gray('  No plugins loaded.'),
+                chalk.dim('  Add plugins to ~/.remus/plugins/ or .remus/plugins/'),
+              ].join('\n')
+            : [
+                chalk.hex('#FF6B35').bold(`⬡ Plugins (${plugins.length})`),
+                ...plugins.map(p => `  ${chalk.hex('#FF8C42')(p.name)} v${p.version} — ${p.description} (${p.tools} tools, ${p.commands} commands)`),
+              ].join('\n');
+          setState(prev => ({
+            ...prev,
+            messages: [...prev.messages, {
+              role: 'system',
+              content: pluginMsg,
+              timestamp: Date.now(),
+            }],
+          }));
+          setInput('');
+          return;
+        }
+
+        case 'health': {
+          if (!engineRef.current) { setInput(''); return; }
+          setState(prev => ({
+            ...prev,
+            isStreaming: true,
+            streamingText: '',
+            messages: [...prev.messages, {
+              role: 'system',
+              content: chalk.hex('#FF6B35')('⬡ Running health checks...'),
+              timestamp: Date.now(),
+            }],
+          }));
+          try {
+            const response = await engineRef.current.submit(
+              'Use the check_health tool to run all available project health checks (typecheck, lint, test, deps). Report the results clearly.'
+            );
+            setState(prev => ({
+              ...prev,
+              isStreaming: false,
+              messages: [...prev.messages, {
+                role: 'assistant',
+                content: prev.streamingText || response,
+                timestamp: Date.now(),
+              }],
+              streamingText: '',
+            }));
+          } catch (err) {
+            setState(prev => ({
+              ...prev,
+              isStreaming: false,
+              error: (err as Error).message,
+              streamingText: '',
+            }));
+          }
+          setInput('');
+          return;
+        }
+
         default:
+          // Check plugin commands
+          const pluginCmd = pluginManagerRef.current.getAllCommands().get(cmd!);
+          if (pluginCmd) {
+            try {
+              const result = await pluginCmd.command.handler(args);
+              setState(prev => ({
+                ...prev,
+                messages: [...prev.messages, {
+                  role: 'system',
+                  content: result,
+                  timestamp: Date.now(),
+                }],
+              }));
+            } catch (err) {
+              setState(prev => ({
+                ...prev,
+                messages: [...prev.messages, {
+                  role: 'system',
+                  content: chalk.red(`Plugin command error: ${(err as Error).message}`),
+                  timestamp: Date.now(),
+                }],
+              }));
+            }
+            setInput('');
+            return;
+          }
+
           setState(prev => ({
             ...prev,
             messages: [...prev.messages, {

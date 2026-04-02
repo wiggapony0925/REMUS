@@ -1,7 +1,8 @@
 // ─────────────────────────────────────────────────────────────
-// Remus — Query Engine (v2)
+// Remus — Query Engine (v3)
 // The core agent loop: prompt → LLM → tools → repeat
-// With: cost tracking, undo, context compaction, retry
+// With: cost tracking, undo, context compaction, retry,
+//       response cache, performance metrics, memory, plugins
 // ─────────────────────────────────────────────────────────────
 
 import type { LLMProvider, Message, ToolCall, ToolDefinition } from '../providers/types.js';
@@ -10,6 +11,9 @@ import { buildSystemPrompt } from '../constants/prompts.js';
 import { getToolDefinitions, findTool } from '../tools/index.js';
 import { CostTracker } from './costTracker.js';
 import { UndoManager } from './undo.js';
+import { ResponseCache } from './responseCache.js';
+import { PerformanceTracker } from './performanceTracker.js';
+import { Memory } from './memory.js';
 import { estimateMessageTokens, needsCompaction, compactMessages, trimToolOutputs } from './contextCompactor.js';
 import chalk from 'chalk';
 
@@ -27,6 +31,9 @@ export interface QueryEngineConfig {
   enableUndo?: boolean;
   enableCostTracking?: boolean;
   autoCompact?: boolean;
+  enableCache?: boolean;
+  enableMemory?: boolean;
+  enablePerformanceTracking?: boolean;
   onText?: (text: string) => void;
   onToolCall?: (name: string, input: Record<string, unknown>) => void;
   onToolResult?: (name: string, result: ToolResult) => void;
@@ -34,6 +41,7 @@ export interface QueryEngineConfig {
   onError?: (error: Error) => void;
   onCostUpdate?: (cost: string) => void;
   onRetry?: (attempt: number, delay: number, error: Error) => void;
+  onSpeedUpdate?: (indicator: string) => void;
 }
 
 export interface ConversationTurn {
@@ -73,9 +81,14 @@ export class QueryEngine {
   // New features
   readonly costTracker: CostTracker;
   readonly undoManager: UndoManager;
+  readonly cache: ResponseCache;
+  readonly perf: PerformanceTracker;
+  readonly memory: Memory;
   private enableUndo: boolean;
   private enableCostTracking: boolean;
   private autoCompact: boolean;
+  private enableCache: boolean;
+  private enableMemory: boolean;
 
   // Callbacks
   private onText: (text: string) => void;
@@ -85,6 +98,7 @@ export class QueryEngine {
   private onError: (error: Error) => void;
   private onCostUpdate: (cost: string) => void;
   private onRetry: (attempt: number, delay: number, error: Error) => void;
+  private onSpeedUpdate: (indicator: string) => void;
 
   stats: SessionStats = {
     turns: 0,
@@ -113,13 +127,19 @@ export class QueryEngine {
     this.onError = config.onError ?? (() => {});
     this.onCostUpdate = config.onCostUpdate ?? (() => {});
     this.onRetry = config.onRetry ?? (() => {});
+    this.onSpeedUpdate = config.onSpeedUpdate ?? (() => {});
 
     // Features
     this.enableUndo = config.enableUndo ?? true;
     this.enableCostTracking = config.enableCostTracking ?? true;
     this.autoCompact = config.autoCompact ?? false;
+    this.enableCache = config.enableCache ?? true;
+    this.enableMemory = config.enableMemory ?? true;
     this.costTracker = new CostTracker();
     this.undoManager = new UndoManager();
+    this.cache = new ResponseCache();
+    this.perf = new PerformanceTracker();
+    this.memory = new Memory('global');
 
     this.toolContext = {
       cwd: this.cwd,
@@ -146,6 +166,32 @@ export class QueryEngine {
    * Returns the final assistant response text.
    */
   async submit(userMessage: string): Promise<string> {
+    const queryTimer = this.perf.startTimer('query:total');
+
+    // Check cache first (SPEED BOOST)
+    if (this.enableCache) {
+      const cached = this.cache.get(userMessage);
+      if (cached) {
+        const duration = queryTimer();
+        if (this.verbose) {
+          console.error(chalk.dim(`  [cache hit — ${duration}ms, saved ${cached.inputTokens + cached.outputTokens} tokens]`));
+        }
+        this.onText(cached.response);
+        return cached.response;
+      }
+    }
+
+    // Add memory context to system prompt
+    if (this.enableMemory) {
+      const memoryContext = this.memory.buildContext(userMessage);
+      if (memoryContext && this.messages.length > 0 && this.messages[0]!.role === 'system') {
+        const sysContent = typeof this.messages[0]!.content === 'string' ? this.messages[0]!.content : '';
+        if (!sysContent.includes('# Remus Memory')) {
+          this.messages[0]!.content = sysContent + '\n\n' + memoryContext;
+        }
+      }
+    }
+
     // Add user message
     this.messages.push({ role: 'user', content: userMessage });
     this.history.push({
@@ -187,6 +233,7 @@ export class QueryEngine {
 
       try {
         // Stream the response
+        const streamTimer = this.perf.startTimer('llm:stream');
         let responseText = '';
         const toolCalls: ToolCall[] = [];
         let inputTokens = 0;
@@ -238,6 +285,13 @@ export class QueryEngine {
           this.onCostUpdate(this.costTracker.getShortCost());
         }
 
+        // Track performance
+        const streamMs = streamTimer();
+        if (outputTokens > 0) {
+          this.perf.recordThroughput(inputTokens, outputTokens, streamMs);
+          this.onSpeedUpdate(this.perf.getSpeedIndicator());
+        }
+
         this.history.push({
           role: 'assistant',
           content: responseText,
@@ -250,6 +304,17 @@ export class QueryEngine {
         if (toolCalls.length === 0) {
           finalText = responseText;
           this.onTurnComplete(turn);
+
+          // Cache the response (only for tool-free completions)
+          if (this.enableCache && responseText.length > 10) {
+            this.cache.set(userMessage, responseText, this.model, inputTokens, outputTokens);
+          }
+
+          // Auto-extract memories
+          if (this.enableMemory) {
+            this.memory.autoExtract(userMessage, responseText);
+          }
+
           break;
         }
 
@@ -309,6 +374,7 @@ export class QueryEngine {
       finalText += '\n\n[Reached maximum turns limit]';
     }
 
+    queryTimer();
     return finalText;
   }
 
@@ -386,6 +452,7 @@ export class QueryEngine {
     this.stats.toolCalls++;
 
     try {
+      const toolTimer = this.perf.startTimer(`tool:${tc.function.name}`);
       // Undo: snapshot file before write operations
       if (this.enableUndo && !tool.isReadOnly) {
         const filePath = (input.file_path ?? input.path) as string | undefined;
@@ -405,6 +472,8 @@ export class QueryEngine {
       }
 
       const result = await tool.call(input, this.toolContext);
+      const toolMs = toolTimer();
+      this.perf.recordToolExecution(tc.function.name, toolMs, !result.isError);
 
       // Undo: record the change after successful write
       if (this.enableUndo && !tool.isReadOnly && !result.isError) {
@@ -443,6 +512,8 @@ export class QueryEngine {
     this.history = [];
     this.toolContext.readFiles.clear();
     this.costTracker.reset();
+    this.cache.reset();
+    this.perf.reset();
     this.stats = {
       turns: 0,
       totalInputTokens: 0,
