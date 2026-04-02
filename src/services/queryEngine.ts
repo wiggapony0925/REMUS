@@ -1,8 +1,9 @@
 // ─────────────────────────────────────────────────────────────
-// Remus — Query Engine (v3)
+// Remus — Query Engine (v4)
 // The core agent loop: prompt → LLM → tools → repeat
 // With: cost tracking, undo, context compaction, retry,
-//       response cache, performance metrics, memory, plugins
+//       response cache, performance metrics, memory, plugins,
+//       model enhancement, smart context, quality pipeline
 // ─────────────────────────────────────────────────────────────
 
 import type { LLMProvider, Message, ToolCall, ToolDefinition } from '../providers/types.js';
@@ -14,6 +15,7 @@ import { UndoManager } from './undo.js';
 import { ResponseCache } from './responseCache.js';
 import { PerformanceTracker } from './performanceTracker.js';
 import { Memory } from './memory.js';
+import { ModelEnhancer, type EnhancementInfo } from './modelEnhancer.js';
 import { estimateMessageTokens, needsCompaction, compactMessages, trimToolOutputs } from './contextCompactor.js';
 import chalk from 'chalk';
 
@@ -34,6 +36,7 @@ export interface QueryEngineConfig {
   enableCache?: boolean;
   enableMemory?: boolean;
   enablePerformanceTracking?: boolean;
+  enableModelEnhancer?: boolean;
   onText?: (text: string) => void;
   onToolCall?: (name: string, input: Record<string, unknown>) => void;
   onToolResult?: (name: string, result: ToolResult) => void;
@@ -42,6 +45,7 @@ export interface QueryEngineConfig {
   onCostUpdate?: (cost: string) => void;
   onRetry?: (attempt: number, delay: number, error: Error) => void;
   onSpeedUpdate?: (indicator: string) => void;
+  onEnhancement?: (info: EnhancementInfo) => void;
 }
 
 export interface ConversationTurn {
@@ -84,11 +88,13 @@ export class QueryEngine {
   readonly cache: ResponseCache;
   readonly perf: PerformanceTracker;
   readonly memory: Memory;
+  readonly enhancer: ModelEnhancer;
   private enableUndo: boolean;
   private enableCostTracking: boolean;
   private autoCompact: boolean;
   private enableCache: boolean;
   private enableMemory: boolean;
+  private enableModelEnhancer: boolean;
 
   // Callbacks
   private onText: (text: string) => void;
@@ -99,6 +105,7 @@ export class QueryEngine {
   private onCostUpdate: (cost: string) => void;
   private onRetry: (attempt: number, delay: number, error: Error) => void;
   private onSpeedUpdate: (indicator: string) => void;
+  private onEnhancement: (info: EnhancementInfo) => void;
 
   stats: SessionStats = {
     turns: 0,
@@ -128,6 +135,7 @@ export class QueryEngine {
     this.onCostUpdate = config.onCostUpdate ?? (() => {});
     this.onRetry = config.onRetry ?? (() => {});
     this.onSpeedUpdate = config.onSpeedUpdate ?? (() => {});
+    this.onEnhancement = config.onEnhancement ?? (() => {});
 
     // Features
     this.enableUndo = config.enableUndo ?? true;
@@ -135,11 +143,19 @@ export class QueryEngine {
     this.autoCompact = config.autoCompact ?? false;
     this.enableCache = config.enableCache ?? true;
     this.enableMemory = config.enableMemory ?? true;
+    this.enableModelEnhancer = config.enableModelEnhancer ?? true;
     this.costTracker = new CostTracker();
     this.undoManager = new UndoManager();
     this.cache = new ResponseCache();
     this.perf = new PerformanceTracker();
     this.memory = new Memory('global');
+    this.enhancer = new ModelEnhancer({
+      cwd: this.cwd,
+      model: this.model,
+      provider: this.provider,
+      verbose: this.verbose,
+      onEnhancement: config.onEnhancement,
+    });
 
     this.toolContext = {
       cwd: this.cwd,
@@ -200,6 +216,23 @@ export class QueryEngine {
       timestamp: Date.now(),
     });
 
+    // ─── MODEL ENHANCER: Enrich the query with smart context ───
+    let activeTemperature = this.temperature;
+    let activeMaxTokens = this.maxTokens;
+
+    if (this.enableModelEnhancer) {
+      this.enhancer.resetCorrections();
+      const enhanced = await this.enhancer.enhanceQuery(userMessage, this.messages);
+      // Replace messages with enhanced version (has injected context + adaptive prompt)
+      this.messages = enhanced.messages;
+      activeTemperature = enhanced.temperature;
+      activeMaxTokens = enhanced.maxTokens;
+
+      if (this.verbose) {
+        console.error(chalk.dim(`  [enhanced] task=${enhanced.taskType} complexity=${enhanced.complexity} ctx=${enhanced.contextChunks.length} chunks temp=${activeTemperature.toFixed(2)}`));
+      }
+    }
+
     // Auto-compact if context is getting large
     if (this.autoCompact && needsCompaction(this.messages, { maxContextTokens: this.maxContextTokens })) {
       try {
@@ -242,8 +275,8 @@ export class QueryEngine {
         const stream = this.provider.stream({
           messages: this.messages,
           tools: this.toolDefs,
-          temperature: this.temperature,
-          maxTokens: this.maxTokens,
+          temperature: activeTemperature,
+          maxTokens: activeMaxTokens,
           model: this.model,
         });
 
@@ -303,6 +336,28 @@ export class QueryEngine {
         // If no tool calls, we're done
         if (toolCalls.length === 0) {
           finalText = responseText;
+
+          // ─── QUALITY PIPELINE: Validate response before returning ───
+          if (this.enableModelEnhancer) {
+            const validationContext = {
+              query: userMessage,
+              readFiles: new Set(this.toolContext.readFiles.keys()),
+              turn,
+            };
+            const qReport = this.enhancer.validateResponse(responseText, validationContext);
+
+            if (!qReport.passed && qReport.autoFixable && qReport.fixInstructions) {
+              // Self-correction: ask the model to fix its own output
+              if (this.verbose) {
+                console.error(chalk.dim(`  [quality] self-correcting (score=${qReport.score})...`));
+              }
+              const correctionPrompt = this.enhancer.buildSelfCorrectionPrompt(qReport, responseText);
+              this.messages.push({ role: 'user', content: correctionPrompt });
+              this.onTurnComplete(turn);
+              continue; // Re-enter the loop for a corrected response
+            }
+          }
+
           this.onTurnComplete(turn);
 
           // Cache the response (only for tool-free completions)
@@ -316,6 +371,20 @@ export class QueryEngine {
           }
 
           break;
+        }
+
+        // ─── QUALITY PIPELINE: Validate tool calls before execution ───
+        if (this.enableModelEnhancer) {
+          for (const tc of toolCalls) {
+            try {
+              const toolArgs = JSON.parse(tc.function.arguments);
+              const toolChecks = this.enhancer.validateToolCall(tc.function.name, toolArgs);
+              const errors = toolChecks.filter(c => !c.passed && c.severity === 'error');
+              if (errors.length > 0 && this.verbose) {
+                console.error(chalk.dim(`  [quality] tool ${tc.function.name}: ${errors.map(e => e.message).join(', ')}`));
+              }
+            } catch { /* invalid JSON — will be caught by tool executor */ }
+          }
         }
 
         // Execute tool calls
@@ -514,6 +583,7 @@ export class QueryEngine {
     this.costTracker.reset();
     this.cache.reset();
     this.perf.reset();
+    this.enhancer.resetCorrections();
     this.stats = {
       turns: 0,
       totalInputTokens: 0,
@@ -565,5 +635,11 @@ export class QueryEngine {
   setCwd(cwd: string): void {
     this.cwd = cwd;
     this.toolContext.cwd = cwd;
+    this.enhancer.setCwd(cwd);
+  }
+
+  setModel(model: string): void {
+    this.model = model;
+    this.enhancer.setModel(model);
   }
 }

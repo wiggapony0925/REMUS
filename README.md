@@ -7,7 +7,7 @@
 ██╔══██╗ ██╔══╝  ██║╚██╔╝██║██║   ██║╚════██║
 ██║  ██║ ███████╗██║ ╚═╝ ██║╚██████╔╝███████║
 ╚═╝  ╚═╝ ╚══════╝╚═╝     ╚═╝ ╚═════╝ ╚══════╝
-         v 2 . 0   —   N E X T   G E N
+    v 2 . 1   —   M O D E L   E N H A N C E D
 ```
 
 ### *by JfmCapitalGroup*
@@ -34,9 +34,9 @@
 
 Remus is the **most feature-rich, zero-telemetry AI coding assistant** that runs entirely in your terminal. It connects to **any LLM provider** — OpenAI, Anthropic, Ollama (free & local), OpenRouter, LM Studio, or any OpenAI-compatible API — and is **future-proofed** for the upcoming **Remus model** by JfmCapitalGroup.
 
-It doesn't just autocomplete code. It **thinks**, **remembers**, **learns**, **plans**, and **self-heals**. Remus v2 features an intelligent model router, response caching, persistent cross-session memory, a full plugin architecture, think-before-act planning, auto-fix pipelines, task queuing, and real-time performance metrics — with **19 agent tools** and counting.
+It doesn't just autocomplete code. It **thinks**, **remembers**, **learns**, **plans**, and **self-heals**. Remus v2.1 features an intelligent model router, response caching, persistent cross-session memory, a full plugin architecture, think-before-act planning, auto-fix pipelines, task queuing, real-time performance metrics, and a **Model Enhancement Layer** that makes any external API model smarter — with smart context injection, adaptive per-model prompting, and automatic quality validation + self-correction — with **19 agent tools** and counting.
 
-> **No vendor lock-in. No tracking. No subscriptions. Complete ownership. Your code stays yours.**
+> **No vendor lock-in. No tracking. No subscriptions. Complete ownership. Bring your own API key and watch it become 10x more effective.**
 
 <br/>
 
@@ -301,6 +301,40 @@ Before executing complex tasks:
 4. Estimates complexity and tool calls
 5. Returns a plan for review before execution
 
+### Model Enhancement Layer (v2.1)
+The core differentiator — a 4-stage middleware pipeline that makes **any** external model drastically more effective:
+
+**1. Context Engine** (`contextEngine.ts`)
+- Auto-indexes the project: detects language, framework, package manager, test runner, build tool
+- Extracts query signals (error-related? refactor? new feature? test?) and pulls relevant files
+- Injects git diff context, TypeScript error context, dependency info
+- Budget-aware: fits within token limits (12K default, 8 files max)
+- File relevance scoring: keyword match in path (0.4) + filename (0.6) + config/test boosts
+
+**2. Adaptive Prompting** (`adaptivePrompting.ts`)
+- Model profiles for 15+ models: GPT-4o, GPT-4o-mini, GPT-4 Turbo, o1, o3-mini, Claude Sonnet/Opus/Haiku, Qwen, Llama, DeepSeek, Mistral, Gemini Pro/Flash
+- Task classification: code-gen, debug, refactor, explain, test, review, architecture, devops
+- Complexity estimation: simple / moderate / complex
+- Per-model optimizations: prompt style (structured/conversational/minimal/chain-of-thought), parallel tools, context window management
+- Weakness compensation: hallucination guard, verbose guard, JSON fencing, tool calling shims, refusal bypass
+- Optimal temperature & max tokens calculated per model + task type
+
+**3. Quality Pipeline** (`qualityPipeline.ts`)
+- Post-response validation: empty check, truncation detection, refusal detection
+- Code block analysis: bracket matching, unterminated strings, mixed indentation (Python), balanced fences
+- Tool call validation: missing paths, no-op edits, dangerous bash commands, TODO placeholders
+- Output sanitization: leaked system prompts, API key detection
+- Consistency checks: references to files not in session
+- Returns quality score (0-100) with auto-fixable flag
+
+**4. Self-Correction Loop**
+- When quality check fails + is auto-fixable, the model is asked to fix its own output
+- Correction prompt includes specific fix instructions from the pipeline
+- Max correction depth prevents infinite loops
+- Result: models catch their own mistakes without user intervention
+
+> **Example:** A tiny Ollama model running locally gets the same smart context injection, project-aware prompting, and self-correction as GPT-4o. Remus makes every model punch above its weight.
+
 <br/>
 
 ## ⚙️ Configuration
@@ -386,7 +420,11 @@ src/
 │   ├── advanced.ts         → Notify, Tree, CheckHealth tools
 │   └── index.ts            → Tool registry (19 tools)
 ├── services/
-│   ├── queryEngine.ts      → Core agent loop (v3: cache, memory, perf)
+│   ├── queryEngine.ts      → Core agent loop (v4: cache, memory, perf, enhancement)
+│   ├── modelEnhancer.ts    → ★ Model enhancement middleware orchestrator
+│   ├── contextEngine.ts    → ★ Smart context injection (project profiling, file ranking)
+│   ├── adaptivePrompting.ts → ★ Per-model optimization (15+ model profiles)
+│   ├── qualityPipeline.ts  → ★ Response validation + self-correction loop
 │   ├── modelRouter.ts      → Smart fast/smart model routing
 │   ├── responseCache.ts    → Exact + fuzzy response cache
 │   ├── memory.ts           → Persistent cross-session memory
@@ -428,6 +466,9 @@ src/
 | **Auto-Fix** | No | No | No | **One command** |
 | **Model Router** | No | No | No | **Smart routing** |
 | **Perf Metrics** | No | No | No | **Real-time** |
+| **Context Engine** | No | No | No | **Auto-inject relevant files** |
+| **Adaptive Prompts** | No | No | No | **Per-model optimization** |
+| **Self-Correction** | No | No | No | **Auto quality pipeline** |
 | **Agent Tools** | Limited | Limited | Limited | **19 tools** |
 
 <br/>
@@ -441,6 +482,9 @@ Remus v2 is designed for speed:
 - **Streaming** for instant visual feedback
 - **Context Compaction** keeps conversations lean and fast
 - **Performance Dashboard** shows real-time latency percentiles
+- **Model Enhancement** — smart context injection means models get exactly the right files, reducing hallucination and wasted tokens
+- **Adaptive Temperature** — auto-tuned per model + task type for optimal output quality
+- **Self-Correction** — quality pipeline catches model mistakes and auto-corrects before the user sees them
 
 <br/>
 
@@ -462,7 +506,7 @@ Remus v2 is designed for speed:
 
 **Built with ❤️ by [JfmCapitalGroup](https://github.com/wiggapony0925)**
 
-**27 source files · 19 agent tools · 8 intelligent services · 20+ slash commands · Infinite potential**
+**31 source files · 19 agent tools · 12 intelligent services · 20+ slash commands · 15+ model profiles · Infinite potential**
 
 MIT License · [Report Bug](https://github.com/wiggapony0925/REMUS/issues) · [Request Feature](https://github.com/wiggapony0925/REMUS/issues)
 

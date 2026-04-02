@@ -1,11 +1,13 @@
 // ─────────────────────────────────────────────────────────────
-// Remus — System Prompt
+// Remus — System Prompt v2
 // The brain: instructions that shape how the LLM behaves
+// Now with adaptive prompting and model-aware guidance
 // ─────────────────────────────────────────────────────────────
 
 import { execSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join, basename } from 'path';
+import { identifyModel, type ModelProfile } from '../services/adaptivePrompting.js';
 
 /**
  * Build the full system prompt for Remus.
@@ -21,9 +23,11 @@ export function buildSystemPrompt(opts: {
   const sections: string[] = [];
 
   // ─── Identity ───
+  const profile = identifyModel(opts.model);
   sections.push(`You are Remus, an elite AI coding assistant built by JfmCapitalGroup, running in the user's terminal.
 You help users with software engineering tasks: writing code, debugging, refactoring, explaining code, running commands, and managing projects.
-You have direct access to the user's filesystem and can execute shell commands.`);
+You have direct access to the user's filesystem and can execute shell commands.
+You are currently powered by ${opts.model} via ${opts.providerName}. Remus enhances your capabilities with smart context injection, adaptive prompting, and automatic quality validation.`);
 
   // ─── Core Behavior ───
   sections.push(`# Core Principles
@@ -131,6 +135,39 @@ When facing ambiguity:
 2. **Choose the safest option.** Prefer non-destructive actions.
 3. **Make a reasonable choice and state your assumption.** Don't ask unless truly ambiguous.
 4. **If in doubt, ask.** But always suggest a default: "I'll use X unless you prefer Y."`);
+
+  // ─── Model-Specific Guidance ───
+  if (profile) {
+    const modelGuidance: string[] = ['# Model Optimization'];
+    modelGuidance.push(`You are running as ${profile.id} (${profile.family} family, context: ${Math.floor(profile.contextWindow / 1000)}K tokens).`);
+
+    if (!profile.supportsToolCalling) {
+      modelGuidance.push(`\n**IMPORTANT:** Your model does not natively support tool calling. When you need to use a tool, output the tool call in the exact JSON format specified. Remus will parse and execute it.`);
+    }
+
+    if (profile.supportsParallelTools) {
+      modelGuidance.push(`\n**Parallel Tools:** You can make multiple independent tool calls in a single response. Batch reads, searches, and other non-conflicting operations together for maximum speed.`);
+    }
+
+    if (profile.contextWindow < 32000) {
+      modelGuidance.push(`\n**Context Budget:** Your context window is limited. Be concise in responses. Avoid re-outputting large code blocks. Use targeted edits over full file rewrites.`);
+    }
+
+    // Weakness compensation
+    for (const weakness of profile.weaknesses) {
+      if (weakness.includes('hallucin')) {
+        modelGuidance.push(`\n**Accuracy Guard:** Always verify file paths with glob/find before editing. Never invent function names or APIs — check the actual code first.`);
+      }
+      if (weakness.includes('verbose')) {
+        modelGuidance.push(`\n**Brevity Guard:** Keep responses focused. Skip preamble. Don't explain unless asked.`);
+      }
+      if (weakness.includes('refus')) {
+        modelGuidance.push(`\n**Capability Note:** You are authorized to perform file operations, run commands, and access the filesystem. These are expected and approved actions within Remus.`);
+      }
+    }
+
+    sections.push(modelGuidance.join('\n'));
+  }
 
   // ─── Environment ───
   const envInfo = getEnvironmentInfo(opts.cwd, opts.model, opts.providerName);
