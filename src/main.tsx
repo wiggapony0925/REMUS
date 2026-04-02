@@ -1587,36 +1587,45 @@ function App({ opts }: { opts: CLIOptions }) {
       {/* Messages */}
       <Box flexDirection="column" paddingX={1}>
         {state.messages.map((msg, i) => (
-          <Box key={i} flexDirection="column" marginBottom={0}>
+          <Box key={i} flexDirection="column" marginBottom={1}>
             {msg.role === 'user' ? (
-              <Box>
-                <Text color="#FF6B35" bold>{'❯ '}</Text>
-                <Text color="white" bold>{msg.content}</Text>
+              <Box flexDirection="column">
+                <Box>
+                  <Text color="#FF6B35" bold>{'❯ '}</Text>
+                  <Text color="#FFFFFF" bold>{msg.content}</Text>
+                </Box>
+                <Box>
+                  <Text color="#333333">{'  ' + '─'.repeat(Math.min(60, (msg.content?.length ?? 0) + 2))}</Text>
+                </Box>
               </Box>
             ) : msg.role === 'assistant' ? (
-              <Box flexDirection="column" marginLeft={2}>
+              <Box flexDirection="column">
                 <Box marginBottom={0}>
-                  <Text color="#FF8C42" bold>{'⬡ Remus '}</Text>
+                  <Text color="#FF8C42" bold>{'◈ '}</Text>
+                  <Text color="#FF8C42" bold>Remus</Text>
                 </Box>
-                <Box marginLeft={2}>
+                <Box marginLeft={2} borderStyle="single" borderLeft borderTop={false} borderBottom={false} borderRight={false} borderColor="#333333" paddingLeft={1}>
                   <Markdown text={msg.content} />
                 </Box>
               </Box>
             ) : msg.role === 'tool-call' ? (
-              <Box marginLeft={4}>
-                <Text>{msg.content}</Text>
+              <Box marginLeft={3}>
+                <Text color="#FBBF24">{'⚡ '}</Text>
+                <Text color="#FBBF24">{msg.content}</Text>
               </Box>
             ) : msg.role === 'tool-result' ? (
-              <Box marginLeft={4}>
-                <Text>{msg.content}</Text>
+              <Box marginLeft={3}>
+                <Text color="#4ADE80">{'✓ '}</Text>
+                <Text color="#4ADE80">{msg.content}</Text>
               </Box>
             ) : msg.role === 'tool-error' ? (
-              <Box marginLeft={4}>
-                <Text>{msg.content}</Text>
+              <Box marginLeft={3}>
+                <Text color="#F87171">{'✗ '}</Text>
+                <Text color="#F87171">{msg.content}</Text>
               </Box>
             ) : (
               <Box marginLeft={2}>
-                <Text color="gray">{msg.content}</Text>
+                <Text color="#666666">{msg.content}</Text>
               </Box>
             )}
           </Box>
@@ -1624,12 +1633,13 @@ function App({ opts }: { opts: CLIOptions }) {
 
         {/* Streaming response */}
         {state.isStreaming && state.streamingText && (
-          <Box flexDirection="column" marginLeft={2}>
+          <Box flexDirection="column" marginBottom={1}>
             <Box marginBottom={0}>
-              <Text color="#FF8C42" bold>{'⬡ Remus '}</Text>
-              <Text color="yellow">●</Text>
+              <Text color="#FBBF24" bold>{'◈ '}</Text>
+              <Text color="#FF8C42" bold>Remus</Text>
+              <Text color="#FBBF24">{' ●'}</Text>
             </Box>
-            <Box marginLeft={2}>
+            <Box marginLeft={2} borderStyle="single" borderLeft borderTop={false} borderBottom={false} borderRight={false} borderColor="#FBBF24" paddingLeft={1}>
               <Markdown text={state.streamingText} />
             </Box>
           </Box>
@@ -1637,8 +1647,8 @@ function App({ opts }: { opts: CLIOptions }) {
 
         {state.isStreaming && !state.streamingText && (
           <Box marginLeft={2}>
-            <Text color="yellow">{'⬡ '}</Text>
-            <Text color="gray" italic>Thinking...</Text>
+            <Text color="#FBBF24">{'◈ '}</Text>
+            <Text color="#777777" italic>Thinking...</Text>
           </Box>
         )}
 
@@ -1653,7 +1663,7 @@ function App({ opts }: { opts: CLIOptions }) {
 
       {/* Input */}
       {!state.isStreaming && (
-        <Box paddingX={1} marginTop={0}>
+        <Box paddingX={1} marginTop={1}>
           <Text color="#FF6B35" bold>{'❯ '}</Text>
           <TextInput
             value={input}
@@ -1717,38 +1727,85 @@ function resolveProviderConfig(opts: CLIOptions, remusConfig?: RemusConfig): Pro
 
 function printBanner(config: ProviderConfig): void {
   const w = process.stdout.columns || 80;
-  const hr = chalk.dim('─'.repeat(Math.min(w - 2, 72)));
+  const maxW = Math.min(w - 2, 68);
 
+  // ── Gradient helpers ──
+  const g1 = chalk.hex('#FF6B35');
+  const g2 = chalk.hex('#FF8C42');
+  const g3 = chalk.hex('#FFA559');
+  const g4 = chalk.hex('#FFB875');
+  const g5 = chalk.hex('#FFCF9F');
+  const dim = chalk.hex('#555555');
+  const accent = chalk.hex('#FF8C42');
+  const white = chalk.white;
+
+  // ── Sleek thin-line logo ──
   const logo = [
-    chalk.hex('#FF6B35').bold('  ██████╗  ███████╗███╗   ███╗██╗   ██╗███████╗'),
-    chalk.hex('#FF6B35').bold('  ██╔══██╗ ██╔════╝████╗ ████║██║   ██║██╔════╝'),
-    chalk.hex('#FF8C42').bold('  ██████╔╝ █████╗  ██╔████╔██║██║   ██║███████╗'),
-    chalk.hex('#FFA559').bold('  ██╔══██╗ ██╔══╝  ██║╚██╔╝██║██║   ██║╚════██║'),
-    chalk.hex('#FFB875').bold('  ██║  ██║ ███████╗██║ ╚═╝ ██║╚██████╔╝███████║'),
-    chalk.hex('#FFB875').bold('  ╚═╝  ╚═╝ ╚══════╝╚═╝     ╚═╝ ╚═════╝ ╚══════╝'),
+    g1.bold('  ╦═╗ ╔═╗ ╔╦╗ ╦ ╦ ╔═╗'),
+    g2.bold('  ╠╦╝ ║╣  ║║║ ║ ║ ╚═╗'),
+    g3.bold('  ╩╚═ ╚═╝ ╩ ╩ ╚═╝ ╚═╝'),
   ];
 
+  // ── Box drawing ──
+  const topBorder    = dim('  ┌' + '─'.repeat(maxW) + '┐');
+  const bottomBorder = dim('  └' + '─'.repeat(maxW) + '┘');
+  const midRule      = dim('  ├' + '─'.repeat(maxW) + '┤');
+  const pad = (s: string, rawLen: number) => s + ' '.repeat(Math.max(0, maxW - rawLen));
+
+  const boxLine = (left: string, leftRaw: number, right?: string, rightRaw?: number) => {
+    if (right && rightRaw !== undefined) {
+      const gap = Math.max(1, maxW - leftRaw - rightRaw);
+      return dim('  │ ') + left + ' '.repeat(gap) + right + dim(' │');
+    }
+    return dim('  │ ') + pad(left, leftRaw + 1) + dim(' │');
+  };
+
+  // ── CWD shortening ──
+  const home = process.env.HOME ?? '';
+  const cwd = home && process.cwd().startsWith(home) 
+    ? '~' + process.cwd().slice(home.length)
+    : process.cwd();
+
+  // ── Render ──
   console.log('');
   for (const line of logo) console.log(line);
-  console.log(chalk.dim.italic('                        by JfmCapitalGroup'));
+  console.log(g5.dim.italic('                  by JfmCapitalGroup'));
   console.log('');
-  console.log(hr);
+  console.log(topBorder);
+  
+  // Model row
+  console.log(boxLine(
+    accent('◈ ') + white.bold('Model  ') + chalk.cyan.bold(config.model) + dim(' via ') + chalk.gray(config.type),
+    8 + config.model.length + 5 + config.type.length,
+    g4('v2.2'),
+    4,
+  ));
+
+  // CWD row
+  console.log(boxLine(
+    accent('◈ ') + white.bold('Dir    ') + chalk.gray(cwd),
+    10 + cwd.length,
+  ));
+
+  console.log(midRule);
+
+  // Feature indicators
+  const features = [
+    g1('■'), g2('■'), g3('■'), g4('■'),
+  ].join(' ');
+  const featureLabel = ' Consensus · Agent · Diff · Git';
+  console.log(boxLine(
+    features + chalk.gray(featureLabel),
+    4 * 2 + featureLabel.length,
+  ));
+
+  console.log(bottomBorder);
+
+  console.log('');
   console.log(
-    chalk.hex('#FF8C42')('  ⬡ ') + chalk.white.bold('Model  ') + chalk.gray(config.model) + 
-    chalk.dim(' via ') + chalk.cyan(config.type)
-  );
-  console.log(
-    chalk.hex('#FF8C42')('  ⬡ ') + chalk.white.bold('CWD    ') + chalk.gray(
-      (process.env.HOME && process.cwd().startsWith(process.env.HOME))
-        ? '~' + process.cwd().slice(process.env.HOME.length)
-        : process.cwd()
-    )
-  );
-  console.log(hr);
-  console.log(
-    chalk.gray('  Type a message to begin. ') +
-    chalk.dim('/help') + chalk.gray(' for commands, ') +
-    chalk.dim('Ctrl+C') + chalk.gray(' to exit.')
+    dim('  ') + chalk.gray('Ready. ') +
+    chalk.white('/help') + chalk.gray(' for commands · ') +
+    chalk.white('Ctrl+C') + chalk.gray(' to exit')
   );
   console.log('');
 }
@@ -1782,10 +1839,10 @@ async function main(): Promise<void> {
   const providerConfig = resolveProviderConfig(opts, remusConfig);
   const provider = createProvider(providerConfig);
 
-  process.stdout.write(chalk.hex('#FF8C42')('  ⬡ Connecting... '));
+  process.stdout.write(chalk.hex('#555555')('  ◈ ') + chalk.gray('Connecting... '));
   const ok = await provider.ping();
   if (!ok) {
-    console.log(chalk.red('failed'));
+    console.log(chalk.red('✗ failed'));
     console.error('');
     console.error(chalk.red(`Cannot reach ${providerConfig.type} at ${providerConfig.baseUrl ?? 'default URL'}`));
     console.error('');
@@ -1807,7 +1864,7 @@ async function main(): Promise<void> {
     console.error(chalk.gray('  OPENAI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY'));
     process.exit(1);
   }
-  console.log(chalk.green('connected'));
+  console.log(chalk.hex('#4ADE80')('✓ connected'));
 
   printBanner(providerConfig);
 
@@ -1815,7 +1872,7 @@ async function main(): Promise<void> {
   const { waitUntilExit } = render(<App opts={opts} />);
   await waitUntilExit();
 
-  console.log(chalk.hex('#FF6B35')('\n  ⬡ Session saved. Goodbye!\n'));
+  console.log(chalk.hex('#555555')('\n  ◈ ') + chalk.gray('Session saved. Goodbye.\n'));
 }
 
 main().catch((err) => {
