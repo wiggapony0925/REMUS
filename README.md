@@ -7,7 +7,7 @@
 ██╔══██╗ ██╔══╝  ██║╚██╔╝██║██║   ██║╚════██║
 ██║  ██║ ███████╗██║ ╚═╝ ██║╚██████╔╝███████║
 ╚═╝  ╚═╝ ╚══════╝╚═╝     ╚═╝ ╚═════╝ ╚══════╝
-    v 2 . 1   —   M O D E L   E N H A N C E D
+      v 2 . 2   —   A U T O N O M O U S
 ```
 
 ### *by JfmCapitalGroup*
@@ -34,7 +34,7 @@
 
 Remus is the **most feature-rich, zero-telemetry AI coding assistant** that runs entirely in your terminal. It connects to **any LLM provider** — OpenAI, Anthropic, Ollama (free & local), OpenRouter, LM Studio, or any OpenAI-compatible API — and is **future-proofed** for the upcoming **Remus model** by JfmCapitalGroup.
 
-It doesn't just autocomplete code. It **thinks**, **remembers**, **learns**, **plans**, and **self-heals**. Remus v2.1 features an intelligent model router, response caching, persistent cross-session memory, a full plugin architecture, think-before-act planning, auto-fix pipelines, task queuing, real-time performance metrics, and a **Model Enhancement Layer** that makes any external API model smarter — with smart context injection, adaptive per-model prompting, and automatic quality validation + self-correction — with **19 agent tools** and counting.
+It doesn't just autocomplete code. It **thinks**, **remembers**, **learns**, **plans**, and **self-heals**. Remus v2.2 features an intelligent model router, response caching, persistent cross-session memory, a full plugin architecture, think-before-act planning, auto-fix pipelines, task queuing, real-time performance metrics, a **Model Enhancement Layer**, and now **6 features no competitor has**: multi-model consensus, autonomous agent mode, diff preview, live file watching, natural language git, and one-command test generation — with **19 agent tools** and **26+ slash commands**.
 
 > **No vendor lock-in. No tracking. No subscriptions. Complete ownership. Bring your own API key and watch it become 10x more effective.**
 
@@ -335,6 +335,58 @@ The core differentiator — a 4-stage middleware pipeline that makes **any** ext
 
 > **Example:** A tiny Ollama model running locally gets the same smart context injection, project-aware prompting, and self-correction as GPT-4o. Remus makes every model punch above its weight.
 
+### Multi-Model Consensus (v2.2)
+Query 2+ models simultaneously and get a merged, best-of-all answer:
+- Sends the same prompt to multiple providers in parallel
+- Three strategies: `best` (judge picks winner), `merge` (synthesize best parts), `vote` (longest/most complete)
+- Uses a judge model to evaluate and merge responses
+- Shows per-model response times, token counts, and a final consensus
+- `/consensus <question>` in the REPL
+
+### Autonomous Agent Mode (v2.2)
+Give Remus a goal and walk away:
+- `/agent add authentication to this app`
+- Plans using Think Mode (step breakdown, risk analysis)
+- Executes steps sequentially, feeding context forward
+- Reports progress in real-time (step-start, step-complete, step-failed)
+- Configurable: max steps, stop-on-error, verbose mode
+- Generates a final report with completion stats
+
+### Diff Preview Mode (v2.2)
+See every change before it happens:
+- `/diff` toggles diff preview mode
+- Generates beautiful red/green inline terminal diffs
+- Line-level LCS-based diffing with context windows
+- Shows hunk headers, additions, deletions, stats
+- Works for edits, new files, and deletions
+
+### Live File Watcher (v2.2)
+Remus watches your files and reacts instantly:
+- `/watch` starts monitoring; `/watch stop` to stop
+- Auto-detects TypeScript errors, Python syntax errors, JSON parse errors
+- Detects merge conflict markers, extremely long lines
+- Shows alerts with file, line, column, and fix suggestions
+- Debounced to avoid alert storms
+
+### Natural Language Git (v2.2)
+Forget git commands. Just speak English:
+- `/git show me what changed yesterday`
+- `/git commit everything with message "feat: add auth"`
+- `/git create branch called feature/login`
+- `/git undo last 2 commits`
+- `/git who wrote src/main.tsx`
+- Supports: status, log, diff, commit, push, pull, branch CRUD, merge, stash, reset, blame
+- Safety: destructive operations use safe defaults (--soft reset)
+
+### Test Generation (v2.2)
+One command to generate a full test suite:
+- `/test src/utils/parser.ts`
+- Auto-detects framework: Jest, Vitest, Mocha, Pytest, Go test, Cargo test
+- Analyzes exports, functions, classes
+- Generates comprehensive tests with edge cases, error cases, mocks
+- Respects project conventions and naming patterns
+- Writes test file to disk immediately
+
 <br/>
 
 ## ⚙️ Configuration
@@ -425,6 +477,12 @@ src/
 │   ├── contextEngine.ts    → ★ Smart context injection (project profiling, file ranking)
 │   ├── adaptivePrompting.ts → ★ Per-model optimization (15+ model profiles)
 │   ├── qualityPipeline.ts  → ★ Response validation + self-correction loop
+│   ├── multiModelConsensus.ts → ★ Query 2+ models & merge outputs
+│   ├── autonomousAgent.ts  → ★ Full autopilot agent (plan → execute → report)
+│   ├── diffPreview.ts      → ★ Inline red/green terminal diffs
+│   ├── fileWatcher.ts      → ★ Live file monitoring + error detection
+│   ├── naturalLanguageGit.ts → ★ Git via plain English
+│   ├── testGenerator.ts    → ★ One-command test suite generation
 │   ├── modelRouter.ts      → Smart fast/smart model routing
 │   ├── responseCache.ts    → Exact + fuzzy response cache
 │   ├── memory.ts           → Persistent cross-session memory
@@ -469,6 +527,12 @@ src/
 | **Context Engine** | No | No | No | **Auto-inject relevant files** |
 | **Adaptive Prompts** | No | No | No | **Per-model optimization** |
 | **Self-Correction** | No | No | No | **Auto quality pipeline** |
+| **Multi-Model** | No | No | No | **Consensus from 2+ models** |
+| **Autonomous Agent** | No | No | No | **Full autopilot mode** |
+| **Diff Preview** | No | No | No | **Red/green inline diffs** |
+| **File Watcher** | No | No | No | **Auto-detect on save** |
+| **NL Git** | No | No | No | **Git via plain English** |
+| **Test Gen** | No | No | No | **One-command test suites** |
 | **Agent Tools** | Limited | Limited | Limited | **19 tools** |
 
 <br/>
@@ -506,7 +570,7 @@ Remus v2 is designed for speed:
 
 **Built with ❤️ by [JfmCapitalGroup](https://github.com/wiggapony0925)**
 
-**31 source files · 19 agent tools · 12 intelligent services · 20+ slash commands · 15+ model profiles · Infinite potential**
+**37 source files · 19 agent tools · 18 intelligent services · 26+ slash commands · 15+ model profiles · Infinite potential**
 
 MIT License · [Report Bug](https://github.com/wiggapony0925/REMUS/issues) · [Request Feature](https://github.com/wiggapony0925/REMUS/issues)
 

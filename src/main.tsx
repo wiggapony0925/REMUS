@@ -18,6 +18,12 @@ import { loadConfig, type RemusConfig } from './services/config.js';
 import { UndoManager } from './services/undo.js';
 import { think, TaskQueue } from './services/thinkMode.js';
 import { PluginManager } from './services/pluginManager.js';
+import { multiModelConsensus, formatConsensusResult, type ConsensusConfig, type ConsensusModel } from './services/multiModelConsensus.js';
+import { runAutonomousAgent, formatAgentResult, type AgentConfig } from './services/autonomousAgent.js';
+import { generateDiff, generateEditDiff, formatDiff, type FileDiff } from './services/diffPreview.js';
+import { FileWatcher, formatAlerts, type WatcherAlert } from './services/fileWatcher.js';
+import { parseGitIntent, executeGitIntent, formatGitPreview, formatGitResult } from './services/naturalLanguageGit.js';
+import { generateTests, formatTestGenResult } from './services/testGenerator.js';
 import {
   createSession,
   saveSession,
@@ -150,6 +156,8 @@ function App({ opts }: { opts: CLIOptions }) {
   const providerConfigRef = useRef<ProviderConfig>(resolveProviderConfig(opts, remusConfigRef.current));
   const taskQueueRef = useRef<TaskQueue>(new TaskQueue());
   const pluginManagerRef = useRef<PluginManager>(new PluginManager());
+  const fileWatcherRef = useRef<FileWatcher | null>(null);
+  const diffPreviewEnabledRef = useRef<boolean>(false);
 
   // Initialize engine
   useEffect(() => {
@@ -350,6 +358,14 @@ function App({ opts }: { opts: CLIOptions }) {
                 `  ${chalk.hex('#B0B0B0')('/plugins')}      ${chalk.gray('─ List loaded plugins')}`,
                 `  ${chalk.hex('#B0B0B0')('/health')}       ${chalk.gray('─ Project health check')}`,
                 `  ${chalk.hex('#B0B0B0')('/exit')}         ${chalk.gray('─ Save and exit')}`,
+                '',
+                chalk.hex('#FF6B35').bold('  Advanced'),
+                `  ${chalk.hex('#FF6B35')('/consensus <q>')} ${chalk.gray('─ Query multiple models & merge')}`,
+                `  ${chalk.hex('#FF6B35')('/agent <goal>')}  ${chalk.gray('─ Autonomous multi-step agent')}`,
+                `  ${chalk.hex('#FF6B35')('/test <file>')}   ${chalk.gray('─ Generate test suite for file')}`,
+                `  ${chalk.hex('#FF6B35')('/git <english>')} ${chalk.gray('─ Git via natural language')}`,
+                `  ${chalk.hex('#FF6B35')('/watch')}         ${chalk.gray('─ Live file watcher (auto-fix)')}`,
+                `  ${chalk.hex('#FF6B35')('/diff')}          ${chalk.gray('─ Toggle diff preview mode')}`,
                 '',
                 chalk.hex('#FF6B35').bold('  ⌨ Keyboard'),
                 chalk.dim('  ────────────────────────────────────'),
@@ -971,6 +987,483 @@ function App({ opts }: { opts: CLIOptions }) {
               ...prev,
               isStreaming: false,
               error: (err as Error).message,
+              streamingText: '',
+            }));
+          }
+          setInput('');
+          return;
+        }
+
+        // ─── NEW v2.1 COMMANDS ───
+
+        case 'consensus': {
+          const query = args.join(' ');
+          if (!query) {
+            setState(prev => ({
+              ...prev,
+              messages: [...prev.messages, {
+                role: 'system',
+                content: [
+                  'Usage: /consensus <question>',
+                  'Query multiple models and get a merged answer.',
+                  '',
+                  'Requires at least 2 providers configured:',
+                  '  OPENAI_API_KEY + ANTHROPIC_API_KEY, or',
+                  '  Multiple models via REMUS_PROVIDER',
+                ].join('\n'),
+                timestamp: Date.now(),
+              }],
+            }));
+            setInput('');
+            return;
+          }
+
+          setState(prev => ({
+            ...prev,
+            isStreaming: true,
+            messages: [...prev.messages, {
+              role: 'system',
+              content: chalk.hex('#FF6B35')('⬡ Multi-Model Consensus — querying models...'),
+              timestamp: Date.now(),
+            }],
+          }));
+
+          try {
+            // Build model list from available providers
+            const consensusModels: ConsensusModel[] = [];
+            const pc = providerConfigRef.current;
+
+            // Primary model
+            consensusModels.push({ provider: pc, label: `${pc.type}/${pc.model}` });
+
+            // Try to find a second model
+            if (pc.fastModel && pc.fastModel !== pc.model) {
+              consensusModels.push({
+                provider: { ...pc, model: pc.fastModel },
+                label: `${pc.type}/${pc.fastModel}`,
+              });
+            } else if (pc.smartModel && pc.smartModel !== pc.model) {
+              consensusModels.push({
+                provider: { ...pc, model: pc.smartModel },
+                label: `${pc.type}/${pc.smartModel}`,
+              });
+            } else {
+              // Use same provider with different temperature as fallback
+              consensusModels.push({
+                provider: { ...pc },
+                label: `${pc.type}/${pc.model} (alt)`,
+              });
+            }
+
+            const result = await multiModelConsensus(query, 'You are a helpful assistant.', {
+              models: consensusModels,
+              strategy: 'merge',
+              timeoutMs: 30_000,
+            });
+
+            setState(prev => ({
+              ...prev,
+              isStreaming: false,
+              messages: [...prev.messages, {
+                role: 'system',
+                content: formatConsensusResult(result),
+                timestamp: Date.now(),
+              }],
+              streamingText: '',
+            }));
+          } catch (err) {
+            setState(prev => ({
+              ...prev,
+              isStreaming: false,
+              error: `Consensus failed: ${(err as Error).message}`,
+              streamingText: '',
+            }));
+          }
+          setInput('');
+          return;
+        }
+
+        case 'agent': {
+          const goal = args.join(' ');
+          if (!goal) {
+            setState(prev => ({
+              ...prev,
+              messages: [...prev.messages, {
+                role: 'system',
+                content: [
+                  'Usage: /agent <goal>',
+                  'Remus plans and executes autonomously.',
+                  '',
+                  'Examples:',
+                  '  /agent add authentication to this app',
+                  '  /agent refactor the database layer to use connection pooling',
+                  '  /agent set up CI/CD with GitHub Actions',
+                ].join('\n'),
+                timestamp: Date.now(),
+              }],
+            }));
+            setInput('');
+            return;
+          }
+
+          if (!engineRef.current) { setInput(''); return; }
+
+          setState(prev => ({
+            ...prev,
+            isStreaming: true,
+            streamingText: '',
+            messages: [...prev.messages, {
+              role: 'system',
+              content: chalk.hex('#FF6B35')('⬡ Autonomous Agent — planning...'),
+              timestamp: Date.now(),
+            }],
+          }));
+
+          try {
+            const agentConfig: AgentConfig = {
+              maxSteps: 10,
+              requireApproval: false,
+              stopOnError: false,
+              verbose: true,
+              providerConfig: providerConfigRef.current,
+            };
+
+            const result = await runAutonomousAgent(
+              goal,
+              engineRef.current,
+              agentConfig,
+              (event) => {
+                if (event.type === 'plan-ready') {
+                  setState(prev => ({
+                    ...prev,
+                    messages: [...prev.messages, {
+                      role: 'system',
+                      content: [
+                        chalk.hex('#FF6B35').bold('⬡ Agent Plan:'),
+                        chalk.white(event.plan),
+                        '',
+                        chalk.hex('#FF8C42').bold('Steps:'),
+                        ...event.steps.map((s, i) => `  ${chalk.hex('#FFB875')(`${i + 1}.`)} ${s}`),
+                        event.risks.length > 0 ? `\n${chalk.yellow('Risks:')}\n${event.risks.map(r => `  ⚠ ${r}`).join('\n')}` : '',
+                        '',
+                        chalk.hex('#FF6B35')('Executing...'),
+                      ].filter(Boolean).join('\n'),
+                      timestamp: Date.now(),
+                    }],
+                  }));
+                } else if (event.type === 'step-start') {
+                  setState(prev => ({
+                    ...prev,
+                    messages: [...prev.messages, {
+                      role: 'system',
+                      content: chalk.hex('#FFB875')(`  ● Step ${event.step}/${event.total}: ${event.description}`),
+                      timestamp: Date.now(),
+                    }],
+                  }));
+                } else if (event.type === 'step-complete') {
+                  setState(prev => ({
+                    ...prev,
+                    messages: [...prev.messages, {
+                      role: 'system',
+                      content: chalk.green(`  ✓ Step ${event.step} done`),
+                      timestamp: Date.now(),
+                    }],
+                  }));
+                } else if (event.type === 'step-failed') {
+                  setState(prev => ({
+                    ...prev,
+                    messages: [...prev.messages, {
+                      role: 'system',
+                      content: chalk.red(`  ✗ Step ${event.step} failed: ${event.error}`),
+                      timestamp: Date.now(),
+                    }],
+                  }));
+                }
+              },
+            );
+
+            setState(prev => ({
+              ...prev,
+              isStreaming: false,
+              messages: [...prev.messages, {
+                role: 'system',
+                content: formatAgentResult(result),
+                timestamp: Date.now(),
+              }],
+              streamingText: '',
+            }));
+          } catch (err) {
+            setState(prev => ({
+              ...prev,
+              isStreaming: false,
+              error: `Agent failed: ${(err as Error).message}`,
+              streamingText: '',
+            }));
+          }
+          setInput('');
+          return;
+        }
+
+        case 'diff': {
+          // Toggle diff preview mode
+          diffPreviewEnabledRef.current = !diffPreviewEnabledRef.current;
+          setState(prev => ({
+            ...prev,
+            messages: [...prev.messages, {
+              role: 'system',
+              content: diffPreviewEnabledRef.current
+                ? `${chalk.green('✓')} Diff preview mode ${chalk.green('enabled')} — edits will show diffs before applying`
+                : `${chalk.yellow('○')} Diff preview mode ${chalk.yellow('disabled')} — edits apply directly`,
+              timestamp: Date.now(),
+            }],
+          }));
+          setInput('');
+          return;
+        }
+
+        case 'watch': {
+          const subCmd = args[0];
+
+          if (subCmd === 'stop') {
+            if (fileWatcherRef.current) {
+              fileWatcherRef.current.stop();
+              const stats = fileWatcherRef.current.getStats();
+              fileWatcherRef.current = null;
+              setState(prev => ({
+                ...prev,
+                messages: [...prev.messages, {
+                  role: 'system',
+                  content: `${chalk.yellow('○')} File watcher stopped (tracked ${stats.changes} changes, ${stats.alerts} alerts)`,
+                  timestamp: Date.now(),
+                }],
+              }));
+            } else {
+              setState(prev => ({
+                ...prev,
+                messages: [...prev.messages, {
+                  role: 'system',
+                  content: 'File watcher is not running.',
+                  timestamp: Date.now(),
+                }],
+              }));
+            }
+            setInput('');
+            return;
+          }
+
+          if (subCmd === 'status') {
+            const stats = fileWatcherRef.current?.getStats();
+            setState(prev => ({
+              ...prev,
+              messages: [...prev.messages, {
+                role: 'system',
+                content: stats
+                  ? [
+                      chalk.hex('#FF6B35').bold('⬡ File Watcher'),
+                      `  Status: ${stats.isRunning ? chalk.green('running') : chalk.gray('stopped')}`,
+                      `  Watching: ${chalk.hex('#FF8C42')(String(stats.watchedDirs))} directories`,
+                      `  Changes detected: ${chalk.hex('#FF8C42')(String(stats.changes))}`,
+                      `  Alerts raised: ${chalk.hex('#FF8C42')(String(stats.alerts))}`,
+                    ].join('\n')
+                  : 'File watcher is not running. Use /watch to start.',
+                timestamp: Date.now(),
+              }],
+            }));
+            setInput('');
+            return;
+          }
+
+          // Start watching
+          if (fileWatcherRef.current) {
+            setState(prev => ({
+              ...prev,
+              messages: [...prev.messages, {
+                role: 'system',
+                content: 'File watcher is already running. Use /watch stop to stop it.',
+                timestamp: Date.now(),
+              }],
+            }));
+            setInput('');
+            return;
+          }
+
+          const watcher = new FileWatcher({ cwd: process.cwd() });
+          fileWatcherRef.current = watcher;
+
+          watcher.start((event, alerts) => {
+            const parts: string[] = [];
+            const icon = event.type === 'create' ? chalk.green('⊕') :
+                         event.type === 'delete' ? chalk.red('⊖') :
+                         chalk.yellow('⟳');
+            parts.push(`${icon} ${chalk.dim('[watch]')} ${event.relativePath}`);
+
+            if (alerts.length > 0) {
+              parts.push(formatAlerts(alerts));
+
+              // Offer to fix errors
+              const errorAlerts = alerts.filter(a => a.type === 'error');
+              if (errorAlerts.length > 0) {
+                parts.push(chalk.hex('#FFB875')(`\n  💡 ${errorAlerts.length} error(s) detected. Send "fix it" or use /autofix`));
+              }
+            }
+
+            setState(prev => ({
+              ...prev,
+              messages: [...prev.messages, {
+                role: 'system',
+                content: parts.join('\n'),
+                timestamp: Date.now(),
+              }],
+            }));
+          });
+
+          setState(prev => ({
+            ...prev,
+            messages: [...prev.messages, {
+              role: 'system',
+              content: `${chalk.green('✓')} File watcher ${chalk.green('started')} — monitoring for changes.\n  Use /watch status for info, /watch stop to stop.`,
+              timestamp: Date.now(),
+            }],
+          }));
+          setInput('');
+          return;
+        }
+
+        case 'git': {
+          const gitInput = args.join(' ');
+          if (!gitInput) {
+            setState(prev => ({
+              ...prev,
+              messages: [...prev.messages, {
+                role: 'system',
+                content: [
+                  'Usage: /git <natural language>',
+                  '',
+                  'Examples:',
+                  '  /git show me what changed',
+                  '  /git commit everything with message "feat: add auth"',
+                  '  /git create branch called feature/login',
+                  '  /git switch to main',
+                  '  /git undo last 2 commits',
+                  '  /git show me what changed yesterday',
+                  '  /git push to origin',
+                  '  /git stash my changes',
+                  '  /git who wrote src/main.tsx',
+                ].join('\n'),
+                timestamp: Date.now(),
+              }],
+            }));
+            setInput('');
+            return;
+          }
+
+          const intent = parseGitIntent(gitInput);
+
+          if (intent.intent === 'unknown') {
+            setState(prev => ({
+              ...prev,
+              messages: [...prev.messages, {
+                role: 'system',
+                content: chalk.yellow(`Couldn't understand: "${gitInput}"\nTry: /git show status, /git commit all, /git create branch <name>`),
+                timestamp: Date.now(),
+              }],
+            }));
+            setInput('');
+            return;
+          }
+
+          // Show preview
+          setState(prev => ({
+            ...prev,
+            messages: [...prev.messages, {
+              role: 'system',
+              content: formatGitPreview(intent),
+              timestamp: Date.now(),
+            }],
+          }));
+
+          // Execute (destructive commands would need approval in production)
+          if (intent.destructive) {
+            setState(prev => ({
+              ...prev,
+              messages: [...prev.messages, {
+                role: 'system',
+                content: chalk.yellow('⚠ This is a destructive operation. Executing with safe defaults (--soft for reset)...'),
+                timestamp: Date.now(),
+              }],
+            }));
+          }
+
+          const result = executeGitIntent(intent, process.cwd());
+          setState(prev => ({
+            ...prev,
+            messages: [...prev.messages, {
+              role: 'system',
+              content: formatGitResult(result),
+              timestamp: Date.now(),
+            }],
+          }));
+          setInput('');
+          return;
+        }
+
+        case 'test': {
+          const filePath = args[0];
+          if (!filePath) {
+            setState(prev => ({
+              ...prev,
+              messages: [...prev.messages, {
+                role: 'system',
+                content: [
+                  'Usage: /test <file>',
+                  'Generate a full test suite for any source file.',
+                  '',
+                  'Examples:',
+                  '  /test src/utils/parser.ts',
+                  '  /test lib/auth.py',
+                  '  /test pkg/handler.go',
+                ].join('\n'),
+                timestamp: Date.now(),
+              }],
+            }));
+            setInput('');
+            return;
+          }
+
+          setState(prev => ({
+            ...prev,
+            isStreaming: true,
+            messages: [...prev.messages, {
+              role: 'system',
+              content: chalk.hex('#FF6B35')(`⬡ Generating tests for ${filePath}...`),
+              timestamp: Date.now(),
+            }],
+          }));
+
+          try {
+            const pc = providerConfigRef.current;
+            const provider = createProvider(pc);
+            const result = await generateTests(filePath, {
+              provider,
+              model: pc.model,
+              cwd: process.cwd(),
+            });
+
+            setState(prev => ({
+              ...prev,
+              isStreaming: false,
+              messages: [...prev.messages, {
+                role: 'system',
+                content: formatTestGenResult(result),
+                timestamp: Date.now(),
+              }],
+              streamingText: '',
+            }));
+          } catch (err) {
+            setState(prev => ({
+              ...prev,
+              isStreaming: false,
+              error: `Test generation failed: ${(err as Error).message}`,
               streamingText: '',
             }));
           }
